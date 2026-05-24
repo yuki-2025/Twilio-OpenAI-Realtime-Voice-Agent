@@ -1,0 +1,20 @@
+[project]
+name = "twilio-voice"
+version = "0.1.0"
+description = "Minimal Twilio Media Streams to OpenAI Realtime example"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+  "fastapi>=0.115",
+  "uvicorn[standard]>=0.30",
+  "pydantic-settings>=2.6",
+  "structlog>=24.4",
+  "openai>=1.60",
+  "pipecat-ai>=0.0.80",
+]
+
+[tool.uv]
+package = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
