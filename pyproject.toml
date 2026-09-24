@@ -11,6 +11,13 @@ dependencies = [
   "structlog>=24.4",
   "openai>=1.60",
   "pipecat-ai>=0.0.80",
+  "twilio>=9,<10",
+]
+
+[dependency-groups]
+dev = [
+  "pytest>=8",
+  "pytest-asyncio>=0.24",
 ]
 
 [tool.uv]

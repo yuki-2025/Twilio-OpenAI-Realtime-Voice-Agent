@@ -68,14 +68,16 @@ Edit `.env` and fill in the required values:
 |---|---|---|
 | `OPENAI_API_KEY` | Yes | Your OpenAI secret key |
 | `PUBLIC_BASE_URL` | Yes | Your ngrok `https://` URL (set after Step 4) |
-| `TWILIO_ACCOUNT_SID` | No | Needed only if you want the bot to hang up calls programmatically |
-| `TWILIO_AUTH_TOKEN` | No | Same as above |
+| `TWILIO_ACCOUNT_SID` | Outbound only | Required for outbound calls and for programmatic hang-up |
+| `TWILIO_AUTH_TOKEN` | Outbound only | Same as above |
+| `TWILIO_PHONE_NUMBER` | Outbound only | Caller ID for outbound calls, in E.164 format (e.g. `+15555550100`). Must be a number owned by your Twilio account |
 | `OPENAI_REALTIME_MODEL` | No | Defaults to `gpt-4o-realtime-preview` |
 | `OPENAI_TRANSCRIPTION_MODEL` | No | Defaults to `gpt-4o-transcribe` |
 | `OPENAI_VOICE` | No | TTS voice — defaults to `marin` |
 | `OPENAI_TTS_SPEED` | No | Speech speed multiplier — defaults to `1.0` |
 | `AGENT_INSTRUCTIONS` | No | System prompt for the agent |
 | `AGENT_GREETING` | No | First thing the agent says when a call connects |
+| `AGENT_OUTBOUND_GREETING` | No | First thing the agent says on calls it places itself |
 
 ---
 
@@ -133,9 +135,56 @@ Call your Twilio number — you should hear the agent greeting within a few seco
 
 ---
 
+## Outbound calling — have the agent call you
+
+The agent can also place the call. Twilio dials the target number from `TWILIO_PHONE_NUMBER`; when the callee answers, Twilio fetches `POST /twiml/outbound`, which streams into the same WebSocket and pipeline as inbound calls. The only difference is the opening line, which comes from `AGENT_OUTBOUND_GREETING`.
+
+```
+python -m app.outbound +1XXXXXXXXXX
+    → Twilio REST API creates the call (From = TWILIO_PHONE_NUMBER)
+    → Callee answers → Twilio POST /twiml/outbound
+    → <Stream> with <Parameter name="direction" value="outbound"/>
+    → Same /twilio/{session_id} WebSocket → agent speaks AGENT_OUTBOUND_GREETING
+```
+
+Requirements: the server and ngrok are running, and `PUBLIC_BASE_URL` matches the current ngrok URL. The Console webhook is **not** used for outbound calls.
+
+```bash
+# Validate and print To / From / Url without calling
+uv run python -m app.outbound +15555550199 --dry-run
+
+# Place the call; prints the Twilio Call SID
+uv run python -m app.outbound +15555550199
+```
+
+Exit codes: `0` success, `1` Twilio rejected the request, `2` invalid number or missing settings. The target number must be E.164 (`+` country code, digits only). The caller ID always comes from `.env` and cannot be overridden from the command line.
+
+---
+
+## Tests
+
+```bash
+uv run pytest -q
+```
+
+---
+
 ## Notes
 
 - **ngrok URL changes on every restart.** Each time you restart ngrok you must update `PUBLIC_BASE_URL` in `.env` *and* the webhook URL in the Twilio Console. A paid ngrok plan gives you a stable domain.
 - **A2P 10DLC.** The Twilio Console may show a banner about A2P 10DLC registration. This only applies to SMS/MMS — it does not affect voice calls.
 - **Emergency address warning.** Twilio may warn about a missing emergency address. Add one in the Console to avoid a $75 fee per emergency call.
-- **TWILIO_ACCOUNT_SID / TWILIO_AUTH_TOKEN** are optional for basic inbound call handling. They are only needed if you want the agent to hang up calls via the Twilio REST API (set `auto_hang_up=True` in `twilio_handler.py`).
+- **TWILIO_ACCOUNT_SID / TWILIO_AUTH_TOKEN** are optional for basic inbound call handling. They are needed for outbound calls, and if you want the agent to hang up calls via the Twilio REST API (set `auto_hang_up=True` in `twilio_handler.py`).
+
+---
+
+## Changelog
+
+## v1.1 Outbound calling - 9/24/2026
+- `app/outbound.py`: CLI (`python -m app.outbound <E.164 number> [--dry-run]`) that places an outbound call through the Twilio REST API, so the agent can call a user instead of only answering. Caller ID is locked to `TWILIO_PHONE_NUMBER` because the Twilio account is shared.
+- `POST /twiml/outbound` + `direction` stream parameter: outbound calls reuse the existing WebSocket/Pipecat pipeline but open with `AGENT_OUTBOUND_GREETING`; inbound TwiML output is unchanged.
+- Fix: agent replies were cut off ~1s after starting. Pipecat's default local turn strategies treated OpenAI Realtime's late caller transcript as a barge-in; the context aggregator now uses `ExternalUserTurnStrategies`, so only OpenAI's server-side VAD interrupts the agent.
+- `tests/`: pytest suite for the outbound module, CLI exit codes, TwiML routes, greeting selection and turn-taking.
+
+## v1.0 Major - Twilio + OpenAI Realtime voice agent
+- Inbound Twilio calls streamed to an OpenAI Realtime voice agent via Pipecat.

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.processors.aggregators.llm_context import LLMContext
-from pipecat.processors.aggregators.llm_response_universal import LLMContextAggregatorPair
+from pipecat.processors.aggregators.llm_response_universal import LLMContextAggregatorPair, LLMUserAggregatorParams
 from pipecat.services.openai.realtime.events import (
     AudioConfiguration,
     AudioInput,
@@ -13,8 +13,25 @@ from pipecat.services.openai.realtime.events import (
     SessionProperties,
 )
 from pipecat.services.openai.realtime.llm import OpenAIRealtimeLLMService
+from pipecat.turns.user_turn_strategies import ExternalUserTurnStrategies
 
 from app.config import Settings
+
+
+def create_context_aggregator(instructions: str, greeting: str) -> LLMContextAggregatorPair:
+    context = LLMContext(
+        messages=[
+            {'role': 'system', 'content': instructions},
+            {'role': 'user', 'content': f'Say to the caller: "{greeting}"'},
+        ]
+    )
+    # OpenAI Realtime detects turns server-side and interrupts the bot itself on speech_started.
+    # Pipecat's default local strategies treat the caller transcript (which arrives after the
+    # bot has started replying) as a barge-in and cut every reply short, so defer to the service.
+    return LLMContextAggregatorPair(
+        context,
+        user_params=LLMUserAggregatorParams(user_turn_strategies=ExternalUserTurnStrategies()),
+    )
 
 
 def create_realtime_pipeline(transport, settings: Settings, instructions: str | None = None, greeting: str | None = None):
@@ -47,13 +64,10 @@ def create_realtime_pipeline(transport, settings: Settings, instructions: str | 
         ),
     )
 
-    context = LLMContext(
-        messages=[
-            {'role': 'system', 'content': instructions or settings.agent_instructions},
-            {'role': 'user', 'content': f'Say to the caller: "{greeting or settings.agent_greeting}"'},
-        ]
+    context_aggregator = create_context_aggregator(
+        instructions or settings.agent_instructions,
+        greeting or settings.agent_greeting,
     )
-    context_aggregator = LLMContextAggregatorPair(context)
 
     pipeline = Pipeline([
         transport.input(),

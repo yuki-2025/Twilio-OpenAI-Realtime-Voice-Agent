@@ -22,9 +22,12 @@ class Settings(BaseSettings):
 
     agent_instructions: str = Field(default='You are a helpful voice assistant. Keep responses brief and natural.')
     agent_greeting: str = Field(default='Hello, how can I help you today?')
+    agent_outbound_greeting: str = Field(default='Hi, this is your AI assistant calling. Is now a good time to talk?')
 
     twilio_account_sid: str = Field(default='')
     twilio_auth_token: str = Field(default='')
+    # E.164 caller ID used for outbound calls; must be a number owned by this Twilio account.
+    twilio_phone_number: str = Field(default='')
 
     @property
     def websocket_url(self) -> str:

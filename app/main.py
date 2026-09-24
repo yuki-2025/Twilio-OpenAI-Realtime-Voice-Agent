@@ -17,15 +17,36 @@ async def health() -> dict[str, str]:
     return {'status': 'ok'}
 
 
-@app.post('/twiml')
-async def twiml(_: Request) -> PlainTextResponse:
-    xml = f'''<?xml version="1.0" encoding="UTF-8"?>
+def build_twiml(stream_url: str, direction: str | None = None) -> str:
+    """Return TwiML that connects the call to our media-stream WebSocket.
+
+    When direction is set it is sent as a <Parameter>, which Twilio forwards in the
+    stream 'start' message so the WebSocket handler can tell outbound from inbound calls.
+    """
+    if direction is None:
+        stream = f'<Stream url="{stream_url}" />'
+    else:
+        stream = (
+            f'<Stream url="{stream_url}">\n'
+            f'      <Parameter name="direction" value="{direction}" />\n'
+            f'    </Stream>'
+        )
+    return f'''<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Connect>
-    <Stream url="{settings.websocket_url}" />
+    {stream}
   </Connect>
 </Response>'''
-    return PlainTextResponse(xml, media_type='application/xml')
+
+
+@app.post('/twiml')
+async def twiml(_: Request) -> PlainTextResponse:
+    return PlainTextResponse(build_twiml(settings.websocket_url), media_type='application/xml')
+
+
+@app.post('/twiml/outbound')
+async def twiml_outbound(_: Request) -> PlainTextResponse:
+    return PlainTextResponse(build_twiml(settings.websocket_url, 'outbound'), media_type='application/xml')
 
 
 @app.websocket('/twilio/{session_id}')
