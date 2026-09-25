@@ -1,6 +1,6 @@
 # Twilio + OpenAI Realtime Voice Agent
 
-A minimal example connecting a Twilio phone call to an OpenAI Realtime voice agent using [Pipecat](https://github.com/pipecat-ai/pipecat).
+A minimal example connecting a Twilio phone call to an OpenAI Realtime voice agent using [Pipecat](https://github.com/pipecat-ai/pipecat), supporting both inbound and outbound calls.
 
 ![alt text](image-2.png)
 ## How it works
