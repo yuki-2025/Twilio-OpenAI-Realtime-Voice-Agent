@@ -10,8 +10,10 @@ dependencies = [
   "pydantic-settings>=2.6",
   "structlog>=24.4",
   "openai>=1.60",
-  "pipecat-ai>=0.0.80",
+  "pipecat-ai>=1.11,<2",
   "twilio>=9,<10",
+  "nicegui>=3.17,<4",
+  "python-multipart>=0.0.31",
 ]
 
 [dependency-groups]

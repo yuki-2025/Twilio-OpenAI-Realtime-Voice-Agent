@@ -5,12 +5,14 @@ import time
 import structlog
 from fastapi import WebSocket
 from pipecat.frames.frames import LLMRunFrame
-from pipecat.pipeline.runner import PipelineRunner
-from pipecat.pipeline.task import PipelineParams, PipelineTask
+from pipecat.pipeline.task import PipelineParams
+from pipecat.pipeline.worker import PipelineWorker
 from pipecat.runner.utils import parse_telephony_websocket
 from pipecat.serializers.twilio import TwilioFrameSerializer
 from pipecat.transports.websocket.fastapi import FastAPIWebsocketParams, FastAPIWebsocketTransport
+from pipecat.workers.runner import WorkerRunner
 
+from app.call_events import CallReporter, hub
 from app.config import Settings
 from app.realtime import create_realtime_pipeline
 
@@ -24,6 +26,14 @@ def resolve_greeting(call_body: dict, settings: Settings) -> str:
     return settings.agent_greeting
 
 
+def create_call_runner() -> WorkerRunner:
+    # uvicorn owns process signals. With handle_sigint=True pipecat replaces the SIGINT handler
+    # (via signal.signal on Windows) and never restores it, so after one call Ctrl+C only
+    # cancelled pipelines instead of stopping the server. On shutdown uvicorn closes the
+    # WebSockets, which cancels the call pipelines through on_client_disconnected.
+    return WorkerRunner(handle_sigint=False)
+
+
 async def handle_twilio_websocket(websocket: WebSocket, session_id: str, settings: Settings) -> None:
     start = time.time()
     await websocket.accept()
@@ -31,9 +41,12 @@ async def handle_twilio_websocket(websocket: WebSocket, session_id: str, setting
     _, call_data = await parse_telephony_websocket(websocket)
     stream_sid = call_data['stream_id']
     call_sid = call_data['call_id']
-    # Custom <Parameter> values from the TwiML <Stream>; empty for plain inbound calls.
+    # Custom <Parameter> values from our TwiML <Stream>: direction and remote (the other party's number).
     call_body = call_data.get('body') or {}
-    direction = call_body.get('direction', 'inbound')
+    direction = 'outbound' if call_body.get('direction') == 'outbound' else 'inbound'
+    remote_number = call_body.get('remote', '')
+    # Publishes call start/end and each transcript line to the console (app/ui.py).
+    reporter = CallReporter(hub, call_sid=call_sid, direction=direction, remote_number=remote_number)
 
     # 把 Twilio WebSocket 消息转成 Pipecat 可处理的帧
     # 反向把 Pipecat 输出帧转回 Twilio 需要的格式
@@ -61,8 +74,13 @@ async def handle_twilio_websocket(websocket: WebSocket, session_id: str, setting
         ),
     )
     
-    pipeline, llm = create_realtime_pipeline(transport, settings, greeting=resolve_greeting(call_body, settings))
-    task = PipelineTask(
+    pipeline, llm = create_realtime_pipeline(
+        transport,
+        settings,
+        greeting=resolve_greeting(call_body, settings),
+        on_transcript=reporter.transcript,
+    )
+    task = PipelineWorker(
         pipeline,
         params=PipelineParams(
             enable_metrics=True,
@@ -84,10 +102,14 @@ async def handle_twilio_websocket(websocket: WebSocket, session_id: str, setting
     async def on_client_disconnected(_transport: object, _client: object) -> None:
         await task.cancel() #客户断开连接时取消任务，释放资源
 
-    runner = PipelineRunner()
+    runner = create_call_runner()
     logger.info('twilio_session_started', session_id=session_id, stream_sid=stream_sid, call_sid=call_sid, direction=direction)
+    reporter.started()
     try:
-        await runner.run(task) #运行管道，直到完成或被取消
+        await runner.add_workers(task)
+        await runner.run() #运行管道，直到完成或被取消
     finally:
-        logger.info('twilio_session_finished', session_id=session_id, duration_sec=round(time.time() - start, 2))
+        duration_sec = round(time.time() - start, 2)
+        logger.info('twilio_session_finished', session_id=session_id, duration_sec=duration_sec)
+        reporter.ended(duration_sec=duration_sec)
         # 确保结束时一定记录时长日志

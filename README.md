@@ -2,6 +2,7 @@
 
 A minimal example connecting a Twilio phone call to an OpenAI Realtime voice agent using [Pipecat](https://github.com/pipecat-ai/pipecat).
 
+![alt text](image-2.png)
 ## How it works
 
 ```
@@ -12,6 +13,8 @@ Caller dials Twilio number
     → Audio streams bidirectionally via OpenAI Realtime API
     → Caller hears the AI voice agent in real time
 ```
+
+The agent can also place calls (CLI or the web console at `/ui`), and the console shows live transcripts of every call.
 
 ## Prerequisites
 
@@ -133,6 +136,35 @@ curl https://your-ngrok-domain.ngrok-free.app/health
 
 Call your Twilio number — you should hear the agent greeting within a few seconds.
 
+Run a **single** uvicorn worker (the default). The call console below keeps its live events in memory inside this process, so `--workers N` would split them across processes.
+
+---
+
+## Call console — dial and watch live transcripts
+
+The same server hosts a web console built with [NiceGUI](https://nicegui.io). Open it on the machine running the server:
+
+```
+http://localhost:8000/ui
+```
+
+- Type a number in E.164 format (e.g. `+15555550199`) and press **Call** or Enter. The agent calls it from `TWILIO_PHONE_NUMBER`, exactly like the CLI below.
+- Every call appears live, whether it was placed from the console, placed from the CLI, or received on the Twilio number. Each line shows local time, direction (`↗` outbound, `↙` inbound), the other party's number, the speaker (`User` / `Agent`) and the transcript.
+- Lines appear once per finished utterance, about a second after the speaker stops. Status lines show dialing, call started and call ended with its duration.
+- The last 500 events stay in memory, so reloading the page keeps recent calls. Restarting the server clears them.
+
+**Local only.** ngrok exposes the whole server, so requests arriving through ngrok (they carry `X-Forwarded-For`) or with a non-localhost `Host` can only reach Twilio's endpoints: `/health`, `/twiml`, `/twiml/outbound` and `/twilio/*`. Everything else, including `/ui`, returns 403. Open the console via `localhost`, not via the ngrok URL.
+
+How transcripts get there:
+
+```
+Twilio POST /twiml or /twiml/outbound
+    → TwiML <Stream> carries <Parameter> direction + remote (from Twilio's From / To form fields)
+    → WebSocket handler publishes call_started / call_ended      (app/call_events.py)
+    → Pipecat aggregator events publish each User / Agent line   (app/realtime.py)
+    → in-process CallEventHub → every open console page          (app/ui.py)
+```
+
 ---
 
 ## Outbound calling — have the agent call you
@@ -179,6 +211,15 @@ uv run pytest -q
 ---
 
 ## Changelog
+
+## v1.2 Call console - 9/24/2026
+- `app/ui.py` (NiceGUI, mounted at `/ui`): enter a number to have the agent call it, and watch every call's transcript live with local timestamps, direction, remote number and speaker, for inbound and outbound calls alike.
+- `app/call_events.py`: in-process event hub plus a per-call reporter; the WebSocket handler publishes call start/end and each finished User/Agent utterance, and every open console page subscribes.
+- TwiML now passes `direction` and `remote` (caller for inbound, callee for outbound, read from Twilio's form fields) as stream parameters, XML-escaped. Inbound TwiML therefore gains these parameters.
+- `app/access_guard.py`: ASGI guard so that through ngrok only Twilio's endpoints are reachable; the console and its WebSocket answer 403 / close code 1008.
+- Upgraded Pipecat 1.2.1 → 1.11.0: migrated `PipelineTask`/`PipelineRunner` to `PipelineWorker`/`WorkerRunner`; the context aggregator runs in `realtime_service_mode` with explicit external turn strategies (OpenAI's server-side VAD proposes turns, the aggregator turns proposals into barge-in); caller transcripts come from `on_user_turn_message_added`. Added `nicegui` and `python-multipart`; FastAPI/Starlette/uvicorn moved up accordingly.
+- Fix: Ctrl+C no longer stopped the server after the first call. Pipecat's runner replaced the SIGINT handler (via `signal.signal` on Windows) and never restored it; the call runner now uses `handle_sigint=False` so uvicorn keeps control of shutdown. Also switched to `add_workers()` + `run()`, as passing a worker to `run()` is deprecated.
+- Tests for the event hub, reporter, TwiML parameters, access guard, console formatting/dialing, and turn-taking and transcript capture against a scripted realtime service.
 
 ## v1.1 Outbound calling - 9/24/2026
 - `app/outbound.py`: CLI (`python -m app.outbound <E.164 number> [--dry-run]`) that places an outbound call through the Twilio REST API, so the agent can call a user instead of only answering. Caller ID is locked to `TWILIO_PHONE_NUMBER` because the Twilio account is shared.
