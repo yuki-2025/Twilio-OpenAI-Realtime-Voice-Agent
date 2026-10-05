@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import secrets
 from xml.sax.saxutils import quoteattr
 
 import structlog
@@ -65,10 +66,19 @@ async def twilio_websocket(websocket: WebSocket, session_id: str) -> None:
     await handle_twilio_websocket(websocket, session_id, settings)
 
 
-# Call console at http://localhost:8000/ui. It shares this process (and the call event hub)
-# with the voice pipeline, so run uvicorn with a single worker.
+# Call console at /ui. It shares this process (and the call event hub) with the voice
+# pipeline, so run uvicorn with a single worker.
+CONSOLE_PATH = '/ui'
 register_console(settings)
-ui.run_with(app, mount_path='/ui', title='Voice Agent Console', show_welcome_message=False)
+ui.run_with(
+    app,
+    mount_path=CONSOLE_PATH,
+    title='Voice Agent Console',
+    show_welcome_message=False,
+    # Signs the session cookie behind the login. A fresh one per process just logs everyone out on restart.
+    storage_secret=secrets.token_urlsafe(32) if settings.console_password else None,
+)
 
-# ngrok exposes this whole app; only Twilio's endpoints may be reached from outside.
-app.add_middleware(LocalOnlyGuard)
+# ngrok/Render expose this whole app; from outside only Twilio's endpoints are reachable,
+# plus the console once it has a password.
+app.add_middleware(LocalOnlyGuard, console_path=CONSOLE_PATH if settings.console_password else None)

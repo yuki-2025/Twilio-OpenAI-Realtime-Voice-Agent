@@ -1,10 +1,10 @@
-"""Keep the call console private while Twilio's endpoints stay public through ngrok.
+"""Decide which parts of the app outside clients may reach.
 
-ngrok forwards to localhost, so the client address cannot tell local from remote.
-Instead a request counts as external when it carries X-Forwarded-For (ngrok adds it)
-or its Host header is not a loopback name. External requests may only reach the
-endpoints Twilio needs; everything else, including the console UI and its
-WebSocket, gets 403 / close code 1008.
+Behind ngrok or Render the client address cannot tell local from remote, so a request
+counts as external when it carries X-Forwarded-For (both proxies add it) or its Host
+header is not a loopback name. External requests may only reach the endpoints Twilio
+needs, plus the call console when it is password protected (console_path); everything
+else gets 403, or close code 1008 for WebSockets.
 """
 
 from __future__ import annotations
@@ -32,16 +32,23 @@ def is_external(scope: Scope) -> bool:
     return _host_name(host) not in LOOPBACK_HOSTS
 
 
-def is_public_path(path: str) -> bool:
+def is_public_path(path: str, console_path: str | None = None) -> bool:
+    if console_path and (path == console_path or path.startswith(console_path + '/')):
+        return True
     return path in PUBLIC_PATHS or path.startswith(PUBLIC_PREFIXES)
 
 
 class LocalOnlyGuard:
-    def __init__(self, app: ASGIApp) -> None:
+    def __init__(self, app: ASGIApp, console_path: str | None = None) -> None:
         self.app = app
+        self.console_path = console_path
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        if scope['type'] in ('http', 'websocket') and is_external(scope) and not is_public_path(scope['path']):
+        if (
+            scope['type'] in ('http', 'websocket')
+            and is_external(scope)
+            and not is_public_path(scope['path'], self.console_path)
+        ):
             if scope['type'] == 'http':
                 await PlainTextResponse('Forbidden', status_code=403)(scope, receive, send)
             else:

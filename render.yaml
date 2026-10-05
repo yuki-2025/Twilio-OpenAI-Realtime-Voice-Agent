@@ -1,0 +1,22 @@
+services:
+  - type: web
+    name: twilio-voice-agent
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    # Free instances sleep when idle, and Twilio's webhook times out while one wakes up.
+    plan: starter
+    healthCheckPath: /health
+    envVars:
+      # Values are entered in the Render dashboard, never committed.
+      - key: PUBLIC_BASE_URL
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: TWILIO_ACCOUNT_SID
+        sync: false
+      - key: TWILIO_AUTH_TOKEN
+        sync: false
+      - key: TWILIO_PHONE_NUMBER
+        sync: false
+      - key: CONSOLE_PASSWORD
+        sync: false

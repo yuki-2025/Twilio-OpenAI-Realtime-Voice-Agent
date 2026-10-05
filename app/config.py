@@ -29,6 +29,9 @@ class Settings(BaseSettings):
     # E.164 caller ID used for outbound calls; must be a number owned by this Twilio account.
     twilio_phone_number: str = Field(default='')
 
+    # When set, the call console asks for this password and may also be reached from outside.
+    console_password: str = Field(default='')
+
     @property
     def websocket_url(self) -> str:
         base = self.public_base_url.rstrip('/')

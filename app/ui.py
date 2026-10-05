@@ -1,18 +1,20 @@
 """Call console (NiceGUI), mounted at /ui by app.main.
 
 Dial a number and watch every call's transcript live, inbound and outbound alike.
-Only reachable from this machine; see app.access_guard.
+Without CONSOLE_PASSWORD it is only reachable from this machine; with it, anyone who
+knows the password can log in from anywhere. See app.access_guard.
 """
 
 from __future__ import annotations
 
 import asyncio
 import bisect
+import secrets
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, tzinfo
 
-from nicegui import ui
+from nicegui import app, ui
 from twilio.base.exceptions import TwilioRestException
 
 from app.call_events import CallEvent, CallEventHub, hub as default_hub, utc_now
@@ -84,10 +86,44 @@ async def dial(
     return DialResult(True, f'Calling {number} ({call_sid})', call_sid)
 
 
+def password_matches(entered: str, expected: str) -> bool:
+    return bool(expected) and secrets.compare_digest(entered.encode(), expected.encode())
+
+
+def render_login(expected_password: str) -> None:
+    with ui.card().classes('absolute-center w-80'):
+        ui.label('Voice Agent Console').classes('text-xl font-semibold')
+        password = ui.input('Password', password=True, password_toggle_button=True).props('outlined dense').classes('w-full')
+
+        def submit() -> None:
+            if password_matches(password.value or '', expected_password):
+                app.storage.user['authenticated'] = True
+                ui.navigate.reload()
+            else:
+                password.value = ''
+                ui.notify('Wrong password', type='negative')
+
+        password.on('keydown.enter', submit)
+        ui.button('Log in', on_click=submit).classes('w-full')
+
+
 def register_console(settings: Settings, hub: CallEventHub = default_hub) -> None:
     @ui.page('/')
     async def console_page() -> None:
-        ui.label('Voice Agent Console').classes('text-2xl font-semibold')
+        # Nothing below is rendered, so no dial handler or transcript exists, until the user logs in.
+        if settings.console_password and not app.storage.user.get('authenticated'):
+            render_login(settings.console_password)
+            return
+
+        with ui.row().classes('w-full items-center justify-between'):
+            ui.label('Voice Agent Console').classes('text-2xl font-semibold')
+            if settings.console_password:
+
+                def log_out() -> None:
+                    app.storage.user.clear()
+                    ui.navigate.reload()
+
+                ui.button('Log out', icon='logout', on_click=log_out).props('flat dense')
 
         with ui.row().classes('items-center gap-4'):
             number = ui.input('Number to call', placeholder='+15555550199').props('outlined dense').classes('w-64')

@@ -81,6 +81,7 @@ Edit `.env` and fill in the required values:
 | `AGENT_INSTRUCTIONS` | No | System prompt for the agent |
 | `AGENT_GREETING` | No | First thing the agent says when a call connects |
 | `AGENT_OUTBOUND_GREETING` | No | First thing the agent says on calls it places itself |
+| `CONSOLE_PASSWORD` | When deployed | Empty keeps the call console local-only. When set, the console asks for this password and can be opened from anywhere. Use a long random value |
 
 ---
 
@@ -153,7 +154,10 @@ http://localhost:8000/ui
 - Lines appear once per finished utterance, about a second after the speaker stops. Status lines show dialing, call started and call ended with its duration.
 - The last 500 events stay in memory, so reloading the page keeps recent calls. Restarting the server clears them.
 
-**Local only.** ngrok exposes the whole server, so requests arriving through ngrok (they carry `X-Forwarded-For`) or with a non-localhost `Host` can only reach Twilio's endpoints: `/health`, `/twiml`, `/twiml/outbound` and `/twilio/*`. Everything else, including `/ui`, returns 403. Open the console via `localhost`, not via the ngrok URL.
+**Access.** ngrok and Render expose the whole server. Requests that arrive through them (they carry `X-Forwarded-For`) or with a non-localhost `Host` can only reach Twilio's endpoints (`/health`, `/twiml`, `/twiml/outbound`, `/twilio/*`). Everything else returns 403. The console itself depends on `CONSOLE_PASSWORD`:
+
+- **Empty (default):** local only. `/ui` from outside returns 403, so open it via `localhost`, not via the ngrok URL.
+- **Set:** `/ui` can be opened from anywhere, but it asks for the password first, locally too. You stay logged in until you click **Log out** or the server restarts.
 
 How transcripts get there:
 
@@ -193,6 +197,32 @@ Exit codes: `0` success, `1` Twilio rejected the request, `2` invalid number or 
 
 ---
 
+## Deploy to Render
+
+The repo includes a `Dockerfile` and a `render.yaml` Blueprint. Render builds the same uv-locked environment you get locally with `uv sync`, then starts one uvicorn worker on the port Render assigns (`$PORT`). Once deployed, you no longer need ngrok.
+
+1. In Render, choose **New → Blueprint** and select this repository. Render reads `render.yaml` and creates the web service `twilio-voice-agent` on the **Starter** plan.
+2. Enter the values it asks for: `OPENAI_API_KEY`, `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_PHONE_NUMBER` and `CONSOLE_PASSWORD`. For `PUBLIC_BASE_URL`, enter `https://twilio-voice-agent.onrender.com` for now. You can add the optional settings from Step 3 (`OPENAI_REALTIME_MODEL`, `AGENT_INSTRUCTIONS`, ...) under **Environment** later.
+3. After the first deploy, compare the service URL Render shows with `PUBLIC_BASE_URL`. If it differs (Render adds a suffix when the name is taken), update `PUBLIC_BASE_URL` and save. Render redeploys automatically.
+4. In the Twilio Console, set the number's **A call comes in** webhook to `https://<your-service>.onrender.com/twiml` (HTTP POST), as in Step 5.
+5. Check it: `curl https://<your-service>.onrender.com/health`, call your Twilio number, then open `https://<your-service>.onrender.com/ui`, log in and place a call.
+
+Things to keep in mind:
+
+- **Use a paid instance.** Free instances go to sleep when idle and take a while to wake up, so Twilio's webhook times out and the call fails.
+- **Run only one instance.** Don't scale out and don't add `--workers`. The console's live events are kept in memory in that one process.
+- **A redeploy restarts the server.** Calls in progress drop, the console's recent history is cleared, and everyone has to log in again.
+- **Twilio's endpoints are public.** `/twiml` and `/twilio/*` do not verify Twilio's request signature yet, so anyone who knows the URL could start an agent session on your OpenAI key.
+
+To try the image locally before deploying:
+
+```bash
+docker build -t voice-agent .
+docker run --rm -p 8000:8000 --env-file .env voice-agent
+```
+
+---
+
 ## Tests
 
 ```bash
@@ -211,6 +241,12 @@ uv run pytest -q
 ---
 
 ## Changelog
+
+## v1.3 Deploy to Render - 10/5/2026
+- `Dockerfile` + `render.yaml`: deploy as a Render web service (Docker, Starter plan, `/health` health check). The image installs dependencies from `uv.lock` with uv, so it matches the local `uv sync`, and starts one uvicorn worker on Render's `$PORT`. Secrets are entered in the Render dashboard, never committed.
+- Console login: when `CONSOLE_PASSWORD` is set, `/ui` shows a password prompt and only renders the dialer and transcripts after login (session kept in NiceGUI user storage, with a **Log out** button). This lets you use the console on a public deployment, where it can place calls on your Twilio account.
+- `app/access_guard.py`: lets external requests reach `/ui` only when the console is password protected. Without a password it behaves as before (console local-only). FastAPI's `/docs` and everything else outside Twilio's endpoints stay blocked from outside.
+- Tests for both guard modes, path-prefix confusion (`/uix`, `/ui-admin`) and the password check.
 
 ## v1.2 Call console - 9/24/2026
 - `app/ui.py` (NiceGUI, mounted at `/ui`): enter a number to have the agent call it, and watch every call's transcript live with local timestamps, direction, remote number and speaker, for inbound and outbound calls alike.

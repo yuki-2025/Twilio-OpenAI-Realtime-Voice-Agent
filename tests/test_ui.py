@@ -7,7 +7,7 @@ from twilio.base.exceptions import TwilioRestException
 
 from app.call_events import CallEvent, CallEventHub
 from app.outbound import OutboundConfigError
-from app.ui import Row, dial, format_event
+from app.ui import Row, dial, format_event, password_matches
 from tests.conftest import make_settings
 
 CDT = timezone(timedelta(hours=-5))
@@ -61,6 +61,20 @@ def test_status_rows(overrides, text):
     row = format_event(make_event(**overrides), tz=CDT)
 
     assert (row.speaker, row.text, row.is_status) == ('', text, True)
+
+
+# --- password_matches --------------------------------------------------------
+
+
+def test_password_matches_only_the_exact_password():
+    assert password_matches('s3cret-Pass', 's3cret-Pass')
+    assert not password_matches('s3cret-pass', 's3cret-Pass')
+    assert not password_matches('', 's3cret-Pass')
+
+
+@pytest.mark.parametrize('entered', ['', 'anything'])
+def test_password_matches_nothing_when_no_password_is_configured(entered):
+    assert not password_matches(entered, '')
 
 
 # --- dial --------------------------------------------------------------------

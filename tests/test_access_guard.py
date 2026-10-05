@@ -13,7 +13,7 @@ VIA_NGROK = {'host': 'example.ngrok-free.app', 'x-forwarded-for': '203.0.113.7'}
 LOCAL = {'host': 'localhost:8000'}
 
 
-def guarded_app() -> FastAPI:
+def guarded_app(console_path: str | None = None) -> FastAPI:
     app = FastAPI()
 
     @app.get('/health')
@@ -40,7 +40,7 @@ def guarded_app() -> FastAPI:
         await ws.send_text('ui')
         await ws.close()
 
-    app.add_middleware(LocalOnlyGuard)
+    app.add_middleware(LocalOnlyGuard, console_path=console_path)
     return app
 
 
@@ -87,9 +87,31 @@ def test_console_websocket_is_rejected_through_ngrok(client):
     assert exc_info.value.code == 1008
 
 
-def test_real_app_blocks_console_but_serves_twiml_through_ngrok(monkeypatch):
+# --- console with a password: its login page handles access ------------------
+
+
+@pytest.fixture
+def open_console_client() -> TestClient:
+    return TestClient(guarded_app(console_path='/ui'))
+
+
+def test_password_protected_console_is_reachable_from_outside(open_console_client):
+    assert open_console_client.get('/ui/', headers=dict(VIA_NGROK)).status_code == 200
+
+
+def test_password_protected_console_websocket_is_reachable_from_outside(open_console_client):
+    with open_console_client.websocket_connect('/ui/_nicegui_ws/socket.io/', headers=dict(VIA_NGROK)) as ws:
+        assert ws.receive_text() == 'ui'
+
+
+@pytest.mark.parametrize('path', ['/docs', '/openapi.json', '/uix', '/ui-admin'])
+def test_other_paths_stay_forbidden_when_console_is_open(open_console_client, path):
+    assert open_console_client.get(path, headers=dict(VIA_NGROK)).status_code == 403
+
+
+def test_real_app_blocks_api_docs_but_serves_twiml_through_ngrok(monkeypatch):
     monkeypatch.setattr(main, 'settings', make_settings())
     client = TestClient(main.app)
 
-    assert client.get('/ui', headers=dict(VIA_NGROK)).status_code == 403
+    assert client.get('/docs', headers=dict(VIA_NGROK)).status_code == 403
     assert client.post('/twiml/outbound', headers=dict(VIA_NGROK)).status_code == 200
