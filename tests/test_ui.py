@@ -6,8 +6,8 @@ import pytest
 from twilio.base.exceptions import TwilioRestException
 
 from app.call_events import CallEvent, CallEventHub
-from app.outbound import OutboundConfigError
-from app.ui import Row, dial, format_event, password_matches
+from app.outbound import HangUpReport, OutboundConfigError
+from app.ui import Row, dial, end_all_calls, format_event, password_matches
 from tests.conftest import make_settings
 
 CDT = timezone(timedelta(hours=-5))
@@ -134,3 +134,47 @@ async def test_dial_reports_failures_instead_of_raising(error, expected_in_messa
     assert not result.ok
     assert expected_in_message in result.message
     assert hub.history() == []
+
+
+# --- end_all_calls -----------------------------------------------------------
+
+
+def hang_up_returning(outcome: HangUpReport | Exception):
+    def hang_up(settings):
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+    return hang_up
+
+
+@pytest.mark.parametrize(
+    ('report', 'ok', 'message'),
+    [
+        (HangUpReport(ended=('CA1', 'CA2'), failed=()), True, 'Ended 2 call(s)'),
+        (HangUpReport(ended=(), failed=()), True, 'No calls in progress'),
+        (
+            HangUpReport(ended=('CA1',), failed=(('CA2', 'Twilio error 21220 (HTTP 400): Invalid call state'),)),
+            False,
+            'Ended 1 call(s); could not end CA2: Twilio error 21220 (HTTP 400): Invalid call state',
+        ),
+    ],
+)
+async def test_end_all_calls_summarises_the_report(report, ok, message):
+    result = await end_all_calls(make_settings(), hang_up=hang_up_returning(report))
+
+    assert (result.ok, result.message) == (ok, message)
+
+
+@pytest.mark.parametrize(
+    ('error', 'expected_in_message'),
+    [
+        (TwilioRestException(401, 'https://api.twilio.com/x', msg='Authenticate', code=20003), '20003'),
+        (OutboundConfigError('Missing required setting(s) in .env: TWILIO_AUTH_TOKEN'), 'TWILIO_AUTH_TOKEN'),
+    ],
+)
+async def test_end_all_calls_reports_failures_instead_of_raising(error, expected_in_message):
+    result = await end_all_calls(make_settings(), hang_up=hang_up_returning(error))
+
+    assert not result.ok
+    assert expected_in_message in result.message

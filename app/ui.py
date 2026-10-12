@@ -19,7 +19,7 @@ from twilio.base.exceptions import TwilioRestException
 
 from app.call_events import CallEvent, CallEventHub, hub as default_hub, utc_now
 from app.config import Settings
-from app.outbound import E164_RE, OutboundConfigError, make_call
+from app.outbound import E164_RE, HangUpReport, OutboundConfigError, describe_twilio_error, hang_up_all, make_call
 
 DIRECTION_ICONS = {'outbound': '↗', 'inbound': '↙'}
 SPEAKERS = {'user': 'User', 'agent': 'Agent'}
@@ -58,7 +58,7 @@ def format_event(event: CallEvent, tz: tzinfo | None = None) -> Row:
 
 
 @dataclass(frozen=True)
-class DialResult:
+class ActionResult:
     ok: bool
     message: str
     call_sid: str | None = None
@@ -70,20 +70,41 @@ async def dial(
     *,
     hub: CallEventHub = default_hub,
     place_call: Callable[[str, Settings], str] = make_call,
-) -> DialResult:
+) -> ActionResult:
     """Place an outbound call for the Call button; failures come back as a message, never raise."""
     number = number.strip()
     if not E164_RE.match(number):
-        return DialResult(False, 'Enter the number in E.164 format, e.g. +15555550199')
+        return ActionResult(False, 'Enter the number in E.164 format, e.g. +15555550199')
     try:
         # The Twilio SDK is blocking; keep it off the event loop that carries call audio.
         call_sid = await asyncio.to_thread(place_call, number, settings)
     except OutboundConfigError as exc:
-        return DialResult(False, str(exc))
+        return ActionResult(False, str(exc))
     except TwilioRestException as exc:
-        return DialResult(False, f'Twilio error {exc.code} (HTTP {exc.status}): {exc.msg}')
+        return ActionResult(False, describe_twilio_error(exc))
     hub.publish(CallEvent(kind='dialing', call_sid=call_sid, timestamp=utc_now(), direction='outbound', remote_number=number))
-    return DialResult(True, f'Calling {number} ({call_sid})', call_sid)
+    return ActionResult(True, f'Calling {number} ({call_sid})', call_sid)
+
+
+async def end_all_calls(
+    settings: Settings,
+    *,
+    hang_up: Callable[[Settings], HangUpReport] = hang_up_all,
+) -> ActionResult:
+    """Hang up every active call on our number for the End all calls button; never raises."""
+    try:
+        report = await asyncio.to_thread(hang_up, settings)
+    except OutboundConfigError as exc:
+        return ActionResult(False, str(exc))
+    except TwilioRestException as exc:
+        return ActionResult(False, describe_twilio_error(exc))
+    ended = f'Ended {len(report.ended)} call(s)'
+    if report.failed:
+        details = '; '.join(f'{sid}: {reason}' for sid, reason in report.failed)
+        return ActionResult(False, f'{ended}; could not end {details}')
+    if not report.ended:
+        return ActionResult(True, 'No calls in progress')
+    return ActionResult(True, ended)
 
 
 def password_matches(entered: str, expected: str) -> bool:
@@ -128,6 +149,7 @@ def register_console(settings: Settings, hub: CallEventHub = default_hub) -> Non
         with ui.row().classes('items-center gap-4'):
             number = ui.input('Number to call', placeholder='+15555550199').props('outlined dense').classes('w-64')
             call_button = ui.button('Call', icon='call')
+            end_button = ui.button('End all calls', icon='call_end', color='negative')
             ui.label(f'Caller ID: {settings.twilio_phone_number or "not set"}').classes('text-sm text-gray-500')
 
         with ui.scroll_area().classes('w-full h-[75vh] border rounded') as scroll:
@@ -174,5 +196,14 @@ def register_console(settings: Settings, hub: CallEventHub = default_hub) -> Non
                 call_button.enable()
             ui.notify(result.message, type='positive' if result.ok else 'negative')
 
+        async def on_end_all() -> None:
+            end_button.disable()
+            try:
+                result = await end_all_calls(settings)
+            finally:
+                end_button.enable()
+            ui.notify(result.message, type='positive' if result.ok else 'negative', multi_line=True)
+
         call_button.on_click(on_call)
         number.on('keydown.enter', on_call)
+        end_button.on_click(on_end_all)

@@ -150,6 +150,7 @@ http://localhost:8000/ui
 ```
 
 - Type a number in E.164 format (e.g. `+15555550199`) and press **Call** or Enter. The agent calls it from `TWILIO_PHONE_NUMBER`, exactly like the CLI below.
+- **End all calls** hangs up every call that is queued, ringing or in progress on `TWILIO_PHONE_NUMBER`, both calls the agent placed and calls it received. It asks Twilio for the current list, so it also catches calls placed before a server restart. Calls on other numbers of the Twilio account are not touched.
 - Every call appears live, whether it was placed from the console, placed from the CLI, or received on the Twilio number. Each line shows local time, direction (`↗` outbound, `↙` inbound), the other party's number, the speaker (`User` / `Agent`) and the transcript.
 - Lines appear once per finished utterance, about a second after the speaker stops. Status lines show dialing, call started and call ended with its duration.
 - The last 500 events stay in memory, so reloading the page keeps recent calls. Restarting the server clears them.
@@ -241,6 +242,11 @@ uv run pytest -q
 ---
 
 ## Changelog
+
+## v1.4 End all calls - 10/5/2026
+- Console **End all calls** button (`app/outbound.py` `hang_up_all`): lists the queued, ringing and in-progress calls from or to `TWILIO_PHONE_NUMBER` through the Twilio REST API and sets each to `completed`. Other numbers on the shared Twilio account are left alone. If some calls cannot be ended, the rest are still hung up and the console lists the ones that failed.
+- Missing-settings errors now say "set them in .env or the environment" instead of only ".env", since on Render the values live in the dashboard.
+- Outbound calls now check `PUBLIC_BASE_URL` before dialing: it must be a public `https://` address with no path. Previously a value such as `http://127.0.0.1:8000/ui/` still placed the call, and only after the callee answered did they hear Twilio's "an application error has occurred", because Twilio could not fetch `/twiml/outbound`.
 
 ## v1.3 Deploy to Render - 10/5/2026
 - `Dockerfile` + `render.yaml`: deploy as a Render web service (Docker, Starter plan, `/health` health check). The image installs dependencies from `uv.lock` with uv, so it matches the local `uv sync`, and starts one uvicorn worker on Render's `$PORT`. Secrets are entered in the Render dashboard, never committed.
